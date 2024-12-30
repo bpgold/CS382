@@ -1,0 +1,9 @@
+
+.data
+hi: 11
+.text
+LDR X0, [X0, 0]
+ADD X0, X0, X0
+ADD X1, X0, X0
+SUB X0, X1, X0
+STR X0, [X0, 20]

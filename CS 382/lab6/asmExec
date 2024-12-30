@@ -1,0 +1,171 @@
+#!/bin/bash
+
+show_help() {
+    echo "assemble, link, execute, and debug ARM assembly"
+    echo "author:  Ryan Monaghan, Jason Qiu"
+    echo "version: 1.0 - 10/4/2024"
+    echo
+    echo "Usage: asmExec [-h|-e|-d|-l|-g|-p <number>|-i <inputfile>|-o <filename>] -f <targetfile>"
+    echo "e    execute after linking"
+    echo "d    debug the program with gdb"
+    echo "p    port number for debugging (default: 4321)"
+    echo "l    link C library when assembling"
+    echo "g    assemble with debug information"
+    echo "i    file that contains the contents to put in stdin"
+    echo "o    output executable name"
+    echo "f    specify file to run"
+}
+
+# setup:
+# in the same folder as the script use:
+#     chmod +x asmExec
+# please note that the script can only be used if it is in your 
+# current directory (as denoted by the ./)
+
+# usage:
+#   (just assembling & linking)
+#     ./asmExec -f your_file.s
+#   (with debug info):
+#     ./asmExec -g -f your_file.s
+#   (with the c library):
+#     ./asmExec -l -f your_file.s
+#   you can combine the 'g' and 'l' flags if you want debug
+#   information and the c library
+
+# usage:
+#   (just executing):
+#     ./asmExec -e -f your_file.s
+#   (with c library):
+#     ./asmExec -e -l -f your_file.s
+#   (with input):
+#     ./asmExec -e -i my_contents.txt -f your_file.s
+
+# usage:
+#   (just debugging):
+#     ./asmExec -g -d -f your_file.s
+#   (with c library):
+#     ./asmExec -g -l -d -f your_file.s
+#   (with input):
+#     ./asmExec -g -d -i my_contents.txt -f your_file.s
+#   (changing port number, replace 5555 with anything)
+#     ./asmExec -g -d -p 5555 -f your_file.s
+
+# No options
+if [ $# -eq 0 ]
+then
+    show_help
+    exit
+fi
+
+# Handle options
+gdb=""
+lc=""
+execute=0
+inputfile=""
+targetfile=""
+port_num="4321"
+stdinfile=""
+while getopts ":gledp:i:o:f:" option; do
+    case $option in
+        l)
+            lc="-lc";;
+        g)
+            gdb="-g";;
+        d)
+            execute=2;;
+        e)
+            execute=1;;
+        f)
+            inputfile="$OPTARG";;
+        p) 
+            port_num="$OPTARG"
+            if [ -z $port_num ] || [ "$port_num" == "-f" ] || [ "$port_num" == "-i" ] || [ "$port_num" == "-o" ]
+            then
+                echo "(-p) you must specify an port number. type ./asmExec -h for help."
+                exit
+            fi;;
+        i)
+            stdinfile="$OPTARG"
+            if [ -z $stdinfile ] || [ "$stdinfile" == "-f" ] || [ "$stdinfile" == "-i" ] || [ "$stdinfile" == "-o" ]
+            then
+                echo "(-i) you must specify an input file. type ./asmExec -h for help."
+                exit
+            fi;;
+        o)
+            targetfile="$OPTARG"
+            if [ -z $targetfile ] || [ "$targetfile" == "-f" ] || [ "$targetfile" == "-i" ] || [ "$targetfile" == "-o" ]
+            then
+                echo "(-o) you must specify an output file. type ./asmExec -h for help."
+                exit
+            fi;;
+        ?)
+            show_help
+            exit;;
+    esac
+done
+
+
+if [ -z $inputfile ] # If inputfile is empty
+then
+    echo "no input file specified"
+    exit
+fi
+
+if [ -z $targetfile ]
+then
+    targetfile=${inputfile%.*}
+fi
+echo "assembling and linking '$inputfile'..."
+aarch64-linux-gnu-as $gdb $inputfile -o $targetfile.o
+aarch64-linux-gnu-ld $targetfile.o -o $targetfile $lc
+echo "done."
+
+if [ $execute -eq 1 ]
+then
+    echo "executing..."
+    if [ -n $lc ]
+    then
+        if [ -z $stdinfile ]
+        then
+            qemu-aarch64 -L /usr/aarch64-linux-gnu/ $targetfile
+        else
+            cat $stdinfile | qemu-aarch64 -L /usr/aarch64-linux-gnu/ $targetfile
+        fi 
+    else
+        if [ -z $stdinfile ]
+        then
+            qemu-aarch64 $targetfile
+        else
+            cat $stdinfile | qemu-aarch64 $targetfile
+        fi 
+    fi
+    echo "done."
+elif [ $execute -eq 2 ]
+then
+    echo "executing in debug mode..."
+    if [ -n $lc ] 
+    then
+        if [ -z $stdinfile ]
+        then
+            qemu-aarch64 -L /usr/aarch64-linux-gnu/ -g $port_num $targetfile &
+        else 
+            cat $stdinfile | qemu-aarch64 -L /usr/aarch64-linux-gnu/ -g $port_num $targetfile &
+        fi 
+    else
+        if [ -z $stdinfile ]
+        then
+            qemu-aarch64 -g $port_num $targetfile &
+        else 
+            cat $stdinfile | qemu-aarch64 -g $port_num $targetfile &
+        fi 
+    fi 
+    echo "starting debug on port $port_num..." &
+    gdb-multiarch --nh -q $targetfile \
+        -ex "set disassemble-next-line on" \
+        -ex "target remote :$port_num" \
+        -ex "set solib-search-path /usr/aarch64-linux-gnu-lib/" \
+        -ex "layout regs"
+    pkill -9 qemu
+    echo "done."
+    exit
+fi
